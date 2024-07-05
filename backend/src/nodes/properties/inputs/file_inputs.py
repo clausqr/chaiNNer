@@ -20,6 +20,7 @@ FileInputKind = Union[
     Literal["pt"],
     Literal["pth"],
     Literal["video"],
+    Literal["capture_device"],
 ]
 
 
@@ -66,7 +67,7 @@ class FileInput(BaseInput):
             value = Path(value)
         assert isinstance(value, Path)
         assert value.exists(), f"File {value} does not exist"
-        assert value.is_file(), f"The path {value} is not a file"
+        assert (value.is_file() or value.is_char_device()), f"The path {value} is not a file or a character device"
         return value
 
 

@@ -17,7 +17,7 @@ from nodes.impl.image_formats import (
     get_opencv_formats,
     get_pil_formats,
 )
-from nodes.properties.inputs import ImageFileInput
+from nodes.properties.inputs import ImageFileInput, FileInput, DirectoryInput
 from nodes.properties.outputs import DirectoryOutput, FileNameOutput, LargeImageOutput, NumberOutput
 from nodes.utils.utils import get_h_w_c, split_file_path
 
@@ -31,10 +31,6 @@ Of the given image is naturally not supported, the decoder may return `None`
 instead of raising an exception. E.g. when the file extension indicates an
 unsupported format.
 """
-
-
-def get_ext(path: Path | str) -> str:
-    return split_file_path(path)[2].lower()
 
 
 def remove_unnecessary_alpha(img: np.ndarray) -> np.ndarray:
@@ -56,7 +52,7 @@ def remove_unnecessary_alpha(img: np.ndarray) -> np.ndarray:
     return img
 
 
-def _read_cv(path: Path) -> np.ndarray | None:
+def _read_cap(path: Path) -> np.ndarray | None:
     if get_ext(path) not in get_opencv_formats():
         # not supported
         return None
@@ -83,63 +79,6 @@ def _read_cv(path: Path) -> np.ndarray | None:
     return img
 
 
-def _read_pil(path: Path) -> np.ndarray | None:
-    if get_ext(path) not in get_pil_formats():
-        # not supported
-        return None
-
-    im = Image.open(path)
-    if im.mode == "P":
-        # convert color palette to actual colors
-        im = im.convert(im.palette.mode)
-
-    img = np.array(im)
-    _, _, c = get_h_w_c(img)
-    if c == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    elif c == 4:
-        img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGRA)
-    return img
-
-
-def _read_dds(path: Path) -> np.ndarray | None:
-    if get_ext(path) != ".dds":
-        # not supported
-        return None
-
-    if platform.system() != "Windows":
-        # texconv is only supported on Windows.
-        return None
-
-    png = dds_to_png_texconv(path)
-    try:
-        img = _read_cv(png)
-        if img is not None:
-            img = remove_unnecessary_alpha(img)
-        return img
-    finally:
-        os.remove(png)
-
-
-def _for_ext(ext: str | Iterable[str], decoder: _Decoder) -> _Decoder:
-    ext_set: set[str] = set()
-    if isinstance(ext, str):
-        ext_set.add(ext)
-    else:
-        ext_set.update(ext)
-
-    return lambda path: decoder(path) if get_ext(path) in ext_set else None
-
-
-_decoders: list[tuple[str, _Decoder]] = [
-    ("pil-jpeg", _for_ext([".jpg", ".jpeg"], _read_pil)),
-    ("cv", _read_cv),
-    ("texconv-dds", _read_dds),
-    ("pil", _read_pil),
-]
-
-valid_formats = get_available_image_formats()
-
 @io_group.register(
     schema_id="chainner:image:load",
     name="Get Frame from Capture Device",
@@ -149,7 +88,11 @@ valid_formats = get_available_image_formats()
     ),
     icon="BsFillImageFill",
     inputs=[
-        ImageFileInput(primary_input=True).with_docs(
+        FileInput(primary_input=True,
+                  label="Capture Device",
+                  file_kind="capture_device",
+                  filetypes=["capture_device"],
+                  has_handle=True).with_docs(
             "Specify the capture device to get the frame from (e.g. /dev/video0)."
         )
     ],
@@ -176,15 +119,18 @@ def get_frame_from_capture_device_node(path: Path) -> tuple[np.ndarray, int, str
     img = None
     error = None
     frame_count = 0
-    for name, decoder in _decoders:
-        try:
-            img = decoder(Path(path))
-        except Exception as e:
-            error = e
-            logger.warning(f"Decoder {name} failed")
+    try:
+        cap = cv2.VideoCapture(str(path))
+        if not cap.isOpened():
+            raise RuntimeError(
+                f'The capture device "{path}" you are trying to get the frame from cannot be read by chaiNNer.'
+            )
 
-        if img is not None:
-            frame_count += 1
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        ret, img = cap.read()
+        cap.release()
+    except Exception as e:
+        error = e
 
     if img is None:
         if error is not None:
