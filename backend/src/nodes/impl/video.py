@@ -107,3 +107,46 @@ class VideoLoader:
                     break
 
                 yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
+
+
+# Class VideoCapture is very similar to VideoLoader, but it uses ffmpeg to read from a capture device:
+class VideoCapture:
+    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
+        self.path = path
+        self.ffmpeg_env = ffmpeg_env
+        self.metadata = VideoMetadata.from_file(path, ffmpeg_env)
+
+    def get_audio_stream(self):
+        return ffmpeg.input(self.path).audio
+
+    def stream_frames(self):
+        """
+        Returns an iterator that yields frames as BGR uint8 numpy arrays.
+        """
+
+        ffmpeg_reader = (
+            ffmpeg.input(self.path)
+            .output(
+                "pipe:",
+                format="rawvideo",
+                pix_fmt="bgr24",
+                sws_flags="lanczos+accurate_rnd+full_chroma_int+full_chroma_inp+bitexact",
+                loglevel="error",
+            )
+            .run_async(pipe_stdout=True, pipe_stderr=False, cmd=self.ffmpeg_env.ffmpeg)
+        )
+        assert isinstance(ffmpeg_reader, subprocess.Popen)
+
+        with ffmpeg_reader:
+            assert isinstance(ffmpeg_reader.stdout, BufferedIOBase)
+
+            width = self.metadata.width
+            height = self.metadata.height
+
+            while True:
+                in_bytes = ffmpeg_reader.stdout.read(width * height * 3)
+                if not in_bytes:
+                    logger.debug("Can't receive frame (stream end?). Exiting ...")
+                    break
+
+                yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
