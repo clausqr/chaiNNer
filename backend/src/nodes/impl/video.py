@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from io import BufferedIOBase
 from pathlib import Path
 
+import cv2
 import ffmpeg
 import numpy as np
 from sanic.log import logger
@@ -48,15 +49,16 @@ class VideoMetadata:
 
         frame_count = video_stream.get("nb_frames", None)
         if frame_count is None:
-            duration = video_stream.get("duration", None)
-            if duration is None:
-                duration = video_format.get("duration", None)
-            if duration is not None:
-                frame_count = float(duration) * fps
-            else:
-                raise RuntimeError(
-                    "No frame count or duration found in video stream. Unable to determine video length. Please report."
-                )
+            frame_count = -1
+            # duration = video_stream.get("duration", None)
+            # if duration is None:
+            #     duration = video_format.get("duration", None)
+            # if duration is not None:
+            #     frame_count = float(duration) * fps
+            # else:
+            #     raise RuntimeError(
+            #         "No frame count or duration found in video stream. Unable to determine video length. Please report."
+            #     )
         frame_count = int(frame_count)
 
         return VideoMetadata(
@@ -111,10 +113,12 @@ class VideoLoader:
 
 # Class VideoCapture is very similar to VideoLoader, but it uses ffmpeg to read from a capture device:
 class VideoCapture:
-    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
+    def __init__(self, path: Path):
         self.path = path
-        self.ffmpeg_env = ffmpeg_env
-        self.metadata = VideoMetadata.from_file(path, ffmpeg_env)
+        self.ffmpeg_reader = None
+        self.metadata = VideoMetadata(width=0, height=0, fps=0, frame_count=-1)
+        self.index = 0
+        self.batch_size = 25
 
     def get_audio_stream(self):
         return ffmpeg.input(self.path).audio
@@ -124,29 +128,31 @@ class VideoCapture:
         Returns an iterator that yields frames as BGR uint8 numpy arrays.
         """
 
-        ffmpeg_reader = (
-            ffmpeg.input(self.path)
-            .output(
-                "pipe:",
-                format="rawvideo",
-                pix_fmt="bgr24",
-                sws_flags="lanczos+accurate_rnd+full_chroma_int+full_chroma_inp+bitexact",
-                loglevel="error",
-            )
-            .run_async(pipe_stdout=True, pipe_stderr=False, cmd=self.ffmpeg_env.ffmpeg)
-        )
-        assert isinstance(ffmpeg_reader, subprocess.Popen)
+        try:
+            cap = cv2.VideoCapture(str(self.path))
 
-        with ffmpeg_reader:
-            assert isinstance(ffmpeg_reader.stdout, BufferedIOBase)
-
-            width = self.metadata.width
-            height = self.metadata.height
+            if not cap.isOpened():
+                logger.error("Error: Couldn't open video source.")
+                return
 
             while True:
-                in_bytes = ffmpeg_reader.stdout.read(width * height * 3)
-                if not in_bytes:
-                    logger.debug("Can't receive frame (stream end?). Exiting ...")
+                frames = []
+                for _ in range(self.batch_size):
+                    ret, frame = cap.read()
+                    if not ret:
+                        logger.debug("Can't receive frame (stream end?). Exiting ...")
+                        break
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                    frames.append(frame)
+
+                if not frames:
                     break
 
-                yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
+                yield frames
+
+        except Exception as e:
+            logger.error(f"Error in stream_frames: {e}")
+            raise
+
+        finally:
+            cap.release()
