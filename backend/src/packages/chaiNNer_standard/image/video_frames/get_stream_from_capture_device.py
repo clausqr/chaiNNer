@@ -7,11 +7,13 @@ import numpy as np
 
 from api import Generator, IteratorOutputInfo, NodeContext
 from nodes.groups import Condition, if_group
+from nodes.impl.video import VideoCapture
 from nodes.properties.inputs import BoolInput, FileInput, NumberInput
 from nodes.properties.outputs import (
     ImageOutput,
     NumberOutput,
 )
+from nodes.utils.utils import split_file_path
 
 from .. import video_frames_group
 
@@ -64,4 +66,27 @@ def get_stream_from_capture_device_node(
     use_limit: bool,
     limit: int,
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float, Any]:
-    video_dir, video_name, _ = split_file_path(path)
+    video_dir, video_name, _ = split_file_path(capture_device)
+
+    loader = VideoCapture(capture_device)
+
+    frame_count = -1
+    if use_limit:
+        frame_count = min(frame_count, limit)
+
+    audio_stream = loader.get_audio_stream()
+
+    def iterator():
+        for index, frame in enumerate(loader.stream_frames()):
+            yield frame, index
+
+            if use_limit and index + 1 >= limit:
+                break
+
+    return (
+        Generator.from_iter(supplier=iterator, expected_length=frame_count),
+        video_dir,
+        video_name,
+        loader.metadata.fps,
+        audio_stream,
+    )
