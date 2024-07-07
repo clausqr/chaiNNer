@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-import os
-import platform
 from pathlib import Path
-from typing import Callable, Iterable, Union
+from typing import Callable, Union
 
 import cv2
 import numpy as np
 import pillow_avif  # type: ignore # noqa: F401
-from PIL import Image
 from sanic.log import logger
 
-from nodes.impl.dds.texconv import dds_to_png_texconv
-from nodes.impl.image_formats import (
-    get_available_image_formats,
-    get_opencv_formats,
-    get_pil_formats,
+from nodes.properties.inputs import FileInput
+from nodes.properties.outputs import (
+    FileNameOutput,
+    LargeImageOutput,
+    NumberOutput,
 )
-from nodes.properties.inputs import ImageFileInput, FileInput, DirectoryInput
-from nodes.properties.outputs import DirectoryOutput, FileNameOutput, LargeImageOutput, NumberOutput
-from nodes.utils.utils import get_h_w_c, split_file_path
+from nodes.utils.utils import get_h_w_c
 
 from .. import io_group
 
@@ -52,33 +47,6 @@ def remove_unnecessary_alpha(img: np.ndarray) -> np.ndarray:
     return img
 
 
-def _read_cap(path: Path) -> np.ndarray | None:
-    if get_ext(path) not in get_opencv_formats():
-        # not supported
-        return None
-
-    img = None
-    try:
-        img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
-    except Exception as cv_err:
-        logger.warning(f"Error loading image, trying with imdecode: {cv_err}")
-
-    if img is None:
-        try:
-            img = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
-        except Exception as e:
-            raise RuntimeError(
-                f'Error reading image image from path "{path}". Image may be corrupt.'
-            ) from e
-
-    if img is None:  # type: ignore
-        raise RuntimeError(
-            f'Error reading image image from path "{path}". Image may be corrupt.'
-        )
-
-    return img
-
-
 @io_group.register(
     schema_id="chainner:image:load",
     name="Get Frame from Capture Device",
@@ -88,11 +56,13 @@ def _read_cap(path: Path) -> np.ndarray | None:
     ),
     icon="BsFillImageFill",
     inputs=[
-        FileInput(primary_input=True,
-                  label="Capture Device",
-                  file_kind="capture_device",
-                  filetypes=["capture_device"],
-                  has_handle=True).with_docs(
+        FileInput(
+            primary_input=True,
+            label="Capture Device",
+            file_kind="capture_device",
+            filetypes=["capture_device"],
+            has_handle=True,
+        ).with_docs(
             "Specify the capture device to get the frame from (e.g. /dev/video0)."
         )
     ],
