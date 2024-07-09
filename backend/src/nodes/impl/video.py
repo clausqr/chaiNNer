@@ -2,6 +2,7 @@ import subprocess
 from dataclasses import dataclass
 from io import BufferedIOBase
 from pathlib import Path
+from time import time
 
 import ffmpeg
 import numpy as np
@@ -106,7 +107,7 @@ class VideoMetadata:
         #         raise RuntimeError(
         #             "No frame count or duration found in video stream. Unable to determine video length. Please report."
         #         )
-        frame_count = 100
+        frame_count = 10000
 
         return VideoMetadata(
             width=width,
@@ -167,7 +168,9 @@ class VideoCapture:
 
     def get_audio_stream(self):
         # Generate a silent audio stream (video capture devices don't have audio)
-        silent_audio = ffmpeg.input("anullsrc=r=44100:cl=stereo", f="lavfi", t=3600)
+        logger.info("Generating silent audio stream for video capture device.")
+        silent_audio = ffmpeg.input("anullsrc=r=44100:cl=stereo", f="lavfi", t=0.001)
+        logger.info("Generated silent audio stream for video capture device.")
         return silent_audio
 
     def stream_frames(self):
@@ -196,10 +199,14 @@ class VideoCapture:
                 width = self.metadata.width
                 height = self.metadata.height
 
-                while True:
+                while self.ffmpeg_reader.poll() is None:
                     in_bytes = self.ffmpeg_reader.stdout.read(width * height * 3)
+                    logger.info(f"Got {len(in_bytes)} bytes from capture device.")
                     if not in_bytes:
-                        logger.debug("Can't receive frame (stream end?). Exiting ...")
-                        break
+                        logger.info("No new data, continuing...")
+                        # logger.debug("Can't receive frame (stream end?). Exiting ...")
+                        # break
+                        continue
 
                     yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
+                    time.sleep(0)
