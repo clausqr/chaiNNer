@@ -166,13 +166,6 @@ class VideoCapture:
         self.ffmpeg_reader = None
         self.metadata = VideoMetadata.from_device(path, ffmpeg_env)
 
-    def get_audio_stream(self):
-        # Generate a silent audio stream (video capture devices don't have audio)
-        logger.info("Generating silent audio stream for video capture device.")
-        silent_audio = ffmpeg.input("anullsrc=r=44100:cl=stereo", f="lavfi", t=0.001)
-        logger.info("Generated silent audio stream for video capture device.")
-        return silent_audio
-
     def stream_frames(self):
         """
         Returns an iterator that yields frames as BGR uint8 numpy arrays.

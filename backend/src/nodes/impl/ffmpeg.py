@@ -9,7 +9,11 @@ from subprocess import check_call
 import requests
 from sanic.log import logger
 
-from system import is_arm_mac, is_linux, is_mac, is_windows
+# from system import is_arm_mac, is_linux, is_mac, is_windows
+is_linux = True
+is_mac = False
+is_windows = False
+is_arm_mac = False
 
 
 def get_download_url() -> str:

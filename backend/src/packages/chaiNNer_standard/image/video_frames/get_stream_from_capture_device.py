@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -11,7 +10,6 @@ from nodes.impl.ffmpeg import FFMpegEnv
 from nodes.impl.video import VideoCapture
 from nodes.properties.inputs import BoolInput, FileInput, NumberInput
 from nodes.properties.outputs import (
-    AudioStreamOutput,
     DirectoryOutput,
     FileNameOutput,
     ImageOutput,
@@ -60,7 +58,6 @@ from .. import video_frames_group
         DirectoryOutput("Capture Device Directory", of_input=0),
         FileNameOutput("Capture Device Name", of_input=0),
         NumberOutput("FPS", output_type="0.."),
-        AudioStreamOutput().suggest(),
     ],
     iterator_outputs=IteratorOutputInfo(
         outputs=[0, 1], length_type="if Input1 { min(uint, Input2) } else { uint }"
@@ -73,15 +70,13 @@ def get_stream_from_capture_device_node(
     path: Path,
     use_limit: bool,
     limit: int,
-) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float, Any]:
+) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float]:
     video_dir, video_name, _ = split_file_path(path)
 
     loader = VideoCapture(path, FFMpegEnv.get_integrated(node_context.storage_dir))
     frame_count = loader.metadata.frame_count
     if use_limit:
         frame_count = min(frame_count, limit)
-
-    audio_stream = loader.get_audio_stream()
 
     def iterator():
         for index, frame in enumerate(loader.stream_frames()):
@@ -95,5 +90,4 @@ def get_stream_from_capture_device_node(
         video_dir,
         video_name,
         loader.metadata.fps,
-        audio_stream,
     )
