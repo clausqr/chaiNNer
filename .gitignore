@@ -244,3 +244,4 @@ dmypy.json
 
 # traces
 backend/traces
+package-lock.json
