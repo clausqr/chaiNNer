@@ -7,9 +7,13 @@ import numpy as np
 
 from api import Generator, IteratorOutputInfo, NodeContext
 from nodes.groups import Condition, if_group
+from nodes.impl.ffmpeg import FFMpegEnv
 from nodes.impl.video import VideoCapture
 from nodes.properties.inputs import BoolInput, FileInput, NumberInput
 from nodes.properties.outputs import (
+    AudioStreamOutput,
+    DirectoryOutput,
+    FileNameOutput,
     ImageOutput,
     NumberOutput,
 )
@@ -17,15 +21,14 @@ from nodes.utils.utils import split_file_path
 
 from .. import video_frames_group
 
-# TODO: get the frames from the capture device and put them into the generator
-
 
 @video_frames_group.register(
-    schema_id="chainner:image:get_frame_from_capture_device",
+    schema_id="chainner:image:get_stream_from_capture_device",
     name="Get Stream from Capture Device",
     description=[
-        "Capture frames from a video capture device.",
-        "This iterator captures frames from a video capture device.",
+        "Get a stream of frames from a capture device.",
+        "Uses FFMPEG to read capture device.",
+        "(experimental)",
     ],
     icon="MdVideoCameraBack",
     inputs=[
@@ -35,12 +38,15 @@ from .. import video_frames_group
             file_kind="capture_device",
             filetypes=["capture_device"],
             has_handle=True,
+        ).with_docs(
+            "Specify the capture device to get the stream from (e.g. /dev/video0)."
         ),
         BoolInput("Use limit", default=False).with_id(1),
         if_group(Condition.bool(1, True))(
             NumberInput("Limit", default=10, min=1)
             .with_docs(
-                "Limit the number of frames to capture. This can be useful for testing the iterator without capturing all frames from the device."
+                "Limit the number of frames to iterate over. This can be useful for testing the iterator without having to iterate over all frames of the video."
+                " Will not copy audio if limit is used."
             )
             .with_id(2)
         ),
@@ -50,9 +56,11 @@ from .. import video_frames_group
         NumberOutput(
             "Frame Index",
             output_type="if Input1 { min(uint, Input2 - 1) } else { uint }",
-        ).with_docs(
-            "A counter that starts at 0 and increments by 1 for each captured frame."
-        ),
+        ).with_docs("A counter that starts at 0 and increments by 1 for each frame."),
+        DirectoryOutput("Capture Device Directory", of_input=0),
+        FileNameOutput("Capture Device Name", of_input=0),
+        NumberOutput("FPS", output_type="0.."),
+        AudioStreamOutput().suggest(),
     ],
     iterator_outputs=IteratorOutputInfo(
         outputs=[0, 1], length_type="if Input1 { min(uint, Input2) } else { uint }"
@@ -62,15 +70,14 @@ from .. import video_frames_group
 )
 def get_stream_from_capture_device_node(
     node_context: NodeContext,
-    capture_device: Path,
+    path: Path,
     use_limit: bool,
     limit: int,
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float, Any]:
-    video_dir, video_name, _ = split_file_path(capture_device)
+    video_dir, video_name, _ = split_file_path(path)
 
-    loader = VideoCapture(capture_device)
-
-    frame_count = -1
+    loader = VideoCapture(path, FFMpegEnv.get_integrated(node_context.storage_dir))
+    frame_count = loader.metadata.frame_count
     if use_limit:
         frame_count = min(frame_count, limit)
 
