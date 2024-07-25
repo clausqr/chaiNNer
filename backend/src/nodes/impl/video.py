@@ -2,7 +2,6 @@ import subprocess
 from dataclasses import dataclass
 from io import BufferedIOBase
 from pathlib import Path
-from time import time
 
 import ffmpeg
 import numpy as np
@@ -122,6 +121,9 @@ class VideoLoader:
         self.path = path
         self.ffmpeg_env = ffmpeg_env
         self.metadata = VideoMetadata.from_file(path, ffmpeg_env)
+        logger.info(
+            f"VideoLoader instantiated with metadata {self.metadata}, id: {id(self)}"
+        )
 
     def get_audio_stream(self):
         return ffmpeg.input(self.path).audio
@@ -192,14 +194,22 @@ class VideoCapture:
                 width = self.metadata.width
                 height = self.metadata.height
 
-                while self.ffmpeg_reader.poll() is None:
+                while True:
                     in_bytes = self.ffmpeg_reader.stdout.read(width * height * 3)
                     logger.info(f"Got {len(in_bytes)} bytes from capture device.")
                     if not in_bytes:
-                        logger.info("No new data, continuing...")
-                        # logger.debug("Can't receive frame (stream end?). Exiting ...")
-                        # break
-                        continue
+                        logger.debug("Can't receive frame (stream end?). Exiting ...")
+                        break
 
-                    yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
-                    time.sleep(0)
+                        continue
+                    else:
+                        # logger.info("Got data, yielding...")
+
+                        yield np.frombuffer(in_bytes, np.uint8).reshape(
+                            [height, width, 3]
+                        )
+
+    def close(self):
+        if self.ffmpeg_reader is not None:
+            self.ffmpeg_reader.terminate()
+            self.ffmpeg_reader = None

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from sanic.log import logger
 
 from api import Generator, IteratorOutputInfo, NodeContext
 from nodes.groups import Condition, if_group
@@ -18,6 +19,16 @@ from nodes.properties.outputs import (
 from nodes.utils.utils import split_file_path
 
 from .. import video_frames_group
+
+
+class VideoCaptureState:
+    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
+        self.loader = VideoCapture(path, ffmpeg_env)
+        self.frame_index = 0
+
+
+# Global dictionary for storing state
+VIDEO_LOADER_STATES = {}
 
 
 @video_frames_group.register(
@@ -39,12 +50,11 @@ from .. import video_frames_group
         ).with_docs(
             "Specify the capture device to get the stream from (e.g. /dev/video0)."
         ),
-        BoolInput("Use limit", default=False).with_id(1),
+        BoolInput("Use limit", default=True).with_id(1),
         if_group(Condition.bool(1, True))(
-            NumberInput("Limit", default=10, min=1)
+            NumberInput("Limit", default=200, min=1)
             .with_docs(
-                "Limit the number of frames to iterate over. This can be useful for testing the iterator without having to iterate over all frames of the video."
-                " Will not copy audio if limit is used."
+                "Limit the number of frames to iterate over. NOTE: Pressing STOP button breaks things, and makes this node ."
             )
             .with_id(2)
         ),
@@ -73,21 +83,30 @@ def get_stream_from_capture_device_node(
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float]:
     video_dir, video_name, _ = split_file_path(path)
 
-    loader = VideoCapture(path, FFMpegEnv.get_integrated(node_context.storage_dir))
-    frame_count = loader.metadata.frame_count
+    # Retrieve or create state object
+    if path not in VIDEO_LOADER_STATES:
+        VIDEO_LOADER_STATES[path] = VideoCaptureState(
+            path, FFMpegEnv.get_integrated(node_context.storage_dir)
+        )
+    state = VIDEO_LOADER_STATES[path]
+
+    logger.info(f"VideoCapture state loaded for path {path}.")
+    frame_count = state.loader.metadata.frame_count
     if use_limit:
         frame_count = min(frame_count, limit)
 
     def iterator():
-        for index, frame in enumerate(loader.stream_frames()):
+        for index, frame in enumerate(state.loader.stream_frames()):
             yield frame, index
-
-            if use_limit and index + 1 >= limit:
+            state.frame_index += 1
+            if use_limit and state.frame_index >= limit:
+                state.loader.close()
+                VIDEO_LOADER_STATES.pop(path)
                 break
 
     return (
         Generator.from_iter(supplier=iterator, expected_length=frame_count),
         video_dir,
         video_name,
-        loader.metadata.fps,
+        state.loader.metadata.fps,
     )

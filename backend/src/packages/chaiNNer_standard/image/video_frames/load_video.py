@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from sanic.log import logger
 
 import navi
 from api import Generator, IteratorOutputInfo, NodeContext, OutputId
@@ -78,7 +79,10 @@ def load_video_node(
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float, Any]:
     video_dir, video_name, _ = split_file_path(path)
 
+    logger.info(f"Instantiating VideoLoader with path {path}...")
     loader = VideoLoader(path, FFMpegEnv.get_integrated(node_context.storage_dir))
+    logger.info(f"VideoLoader instantiated with metadata {loader.metadata}.")
+
     frame_count = loader.metadata.frame_count
     if use_limit:
         frame_count = min(frame_count, limit)
