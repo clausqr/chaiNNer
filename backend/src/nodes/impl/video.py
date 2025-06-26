@@ -2,6 +2,7 @@ import subprocess
 from dataclasses import dataclass
 from io import BufferedIOBase
 from pathlib import Path
+from typing import Generator
 
 import ffmpeg
 import numpy as np
@@ -162,54 +163,84 @@ class VideoLoader:
 
 
 class VideoCapture:
+    """
+    Handles capturing video from a v4l2 device using FFmpeg.
+    This class is stateful and is reused across multiple chain runs.
+    """
+
     def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
-        self.ffmpeg_reader = None
-        self.metadata = VideoMetadata.from_device(path, ffmpeg_env)
+        # Do not probe the device, as it can hang. Instead, create mock
+        # metadata to satisfy the node's requirements for properties like
+        # frame_count, which is conceptually infinite for a live stream.
+        self.metadata = VideoMetadata(
+            width=640, height=480, fps=30.0, frame_count=10000
+        )
+        logger.info(f"VideoCapture stateful instance initialized for {self.path}")
 
-    def stream_frames(self):
+    def stream_frames(self) -> Generator[np.ndarray, None, None]:
         """
-        Returns an iterator that yields frames as BGR uint8 numpy arrays.
+        A generator that yields video frames. It handles the entire lifecycle
+        of the ffmpeg process for a single streaming session and ensures
+        it is cleaned up afterward.
         """
-        if self.ffmpeg_reader is None:
-            self.ffmpeg_reader = (
-                ffmpeg.input(self.path, f="v4l2")
-                .output(
-                    "pipe:",
-                    format="rawvideo",
-                    pix_fmt="bgr24",
-                    sws_flags="lanczos+accurate_rnd+full_chroma_int+full_chroma_inp+bitexact",
-                    loglevel="error",
+        process: subprocess.Popen | None = None
+        width = 640
+        height = 480
+        frame_size = width * height * 3
+
+        try:
+            # 1. Start the FFmpeg subprocess for this specific stream session.
+            logger.info(f"Attempting to start new FFmpeg stream for {self.path}...")
+            process = (
+                ffmpeg.input(
+                    self.path,
+                    f="v4l2",
+                    input_format="yuyv422",
+                    video_size=f"{width}x{height}",
                 )
+                .output("pipe:", format="rawvideo", pix_fmt="bgr24")
                 .run_async(
-                    pipe_stdout=True, pipe_stderr=False, cmd=self.ffmpeg_env.ffmpeg
+                    pipe_stdout=True, pipe_stderr=True, cmd=self.ffmpeg_env.ffmpeg
                 )
             )
-            assert isinstance(self.ffmpeg_reader, subprocess.Popen)
+            assert process is not None  # For the type checker
+            logger.info(f"FFmpeg stream started with PID: {process.pid}")
 
-            with self.ffmpeg_reader:
-                assert isinstance(self.ffmpeg_reader.stdout, BufferedIOBase)
+            # 2. Enter the capture loop.
+            while True:
+                # Check for termination.
+                if process.poll() is not None:
+                    break
 
-                width = self.metadata.width
-                height = self.metadata.height
+                # Read a single frame from stdout.
+                assert process.stdout is not None
+                in_bytes = process.stdout.read(frame_size)
+                if not in_bytes:
+                    break
 
-                while True:
-                    in_bytes = self.ffmpeg_reader.stdout.read(width * height * 3)
-                    logger.info(f"Got {len(in_bytes)} bytes from capture device.")
-                    if not in_bytes:
-                        logger.debug("Can't receive frame (stream end?). Exiting ...")
-                        break
+                if len(in_bytes) == frame_size:
+                    yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
 
-                        continue
-                    else:
-                        # logger.info("Got data, yielding...")
+        except ffmpeg.Error as e:
+            stderr = e.stderr.decode(errors="ignore") if e.stderr else "N/A"
+            logger.error(f"FFmpeg failed to start for {self.path}. Stderr: {stderr}")
+            raise RuntimeError(f"FFmpeg startup failed: {stderr}") from e
 
-                        yield np.frombuffer(in_bytes, np.uint8).reshape(
-                            [height, width, 3]
-                        )
-
-    def close(self):
-        if self.ffmpeg_reader is not None:
-            self.ffmpeg_reader.terminate()
-            self.ffmpeg_reader = None
+        finally:
+            # 3. Ensure the process for THIS stream is cleaned up.
+            if process:
+                logger.info(f"Closing FFmpeg stream with PID: {process.pid}")
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    logger.warning(
+                        f"FFmpeg stream {process.pid} did not terminate, killing."
+                    )
+                    process.kill()
+                except Exception as e:
+                    logger.error(f"Error during FFmpeg stream cleanup: {e}")
+            logger.info("FFmpeg stream session ended.")

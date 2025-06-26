@@ -17,14 +17,34 @@ from nodes.properties.outputs import (
     NumberOutput,
 )
 from nodes.utils.utils import split_file_path
+from progress_controller import Aborted
 
 from .. import video_frames_group
 
 
 class VideoCaptureState:
     def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
-        self.loader = VideoCapture(path, ffmpeg_env)
+        self.path = path
+        self.ffmpeg_env = ffmpeg_env
+        self.loader = None
         self.frame_index = 0
+        self._create_loader()
+
+    def _create_loader(self):
+        """Create a new VideoCapture instance"""
+        self.loader = VideoCapture(self.path, self.ffmpeg_env)
+        self.frame_index = 0
+
+    def reset(self):
+        """Reset the state for a new capture session"""
+        self._create_loader()
+
+    def cleanup(self):
+        """Clean up resources"""
+        # The new VideoCapture class manages its own cleanup internally
+        # via the stream_frames generator's finally block. No explicit
+        # close call is needed here anymore.
+        self.loader = None
 
 
 # Global dictionary for storing state
@@ -53,9 +73,7 @@ VIDEO_LOADER_STATES = {}
         BoolInput("Use limit", default=True).with_id(1),
         if_group(Condition.bool(1, True))(
             NumberInput("Limit", default=200, min=1)
-            .with_docs(
-                "Limit the number of frames to iterate over. NOTE: Pressing STOP button breaks things, and makes this node ."
-            )
+            .with_docs("Limit the number of frames to iterate over.")
             .with_id(2)
         ),
     ],
@@ -88,25 +106,57 @@ def get_stream_from_capture_device_node(
         VIDEO_LOADER_STATES[path] = VideoCaptureState(
             path, FFMpegEnv.get_integrated(node_context.storage_dir)
         )
+    # Reuse existing stream if already available to avoid FPS drops.
+
     state = VIDEO_LOADER_STATES[path]
 
+    # Add cleanup function to node context - only clean up after the node is done
+    def cleanup_state():
+        if path in VIDEO_LOADER_STATES:
+            VIDEO_LOADER_STATES[path].cleanup()
+            VIDEO_LOADER_STATES.pop(path, None)
+            logger.info(f"Cleaned up VideoCapture state for path {path}")
+
+    # Only add cleanup after the node execution is complete
+    node_context.add_cleanup(cleanup_state, after="chain")
+
     logger.info(f"VideoCapture state loaded for path {path}.")
-    frame_count = state.loader.metadata.frame_count
-    if use_limit:
-        frame_count = min(frame_count, limit)
+    # The frame count for a live stream is conceptually infinite.
+    # Use the user-defined limit if provided, otherwise a large number.
+    frame_count = limit if use_limit else 1000000
 
     def iterator():
-        for index, frame in enumerate(state.loader.stream_frames()):
-            yield frame, index
-            state.frame_index += 1
-            if use_limit and state.frame_index >= limit:
-                state.loader.close()
-                VIDEO_LOADER_STATES.pop(path)
-                break
+        try:
+            # Ensure we have a valid loader
+            if state.loader is None:
+                state._create_loader()
+
+            for index, frame in enumerate(state.loader.stream_frames()):
+                # Check if execution was aborted
+                if node_context.aborted:
+                    logger.info("Video capture aborted by user")
+                    break
+
+                yield frame, index
+                state.frame_index += 1
+                if use_limit and state.frame_index >= limit:
+                    break
+        except Aborted:
+            logger.info("Video capture aborted")
+            raise
+        except Exception as e:
+            logger.error(f"Error during video capture: {e}")
+            # Clean up state on error
+            state.cleanup()
+            VIDEO_LOADER_STATES.pop(path, None)
+            raise
+
+    # Hardcode a reasonable FPS, as probing is unreliable for live devices.
+    fps = 30.0
 
     return (
         Generator.from_iter(supplier=iterator, expected_length=frame_count),
         video_dir,
         video_name,
-        state.loader.metadata.fps,
+        fps,
     )
