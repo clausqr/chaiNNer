@@ -234,7 +234,9 @@ class VideoCapture:
                     break
 
                 if len(in_bytes) == frame_size:
-                    yield np.frombuffer(in_bytes, np.uint8).reshape([height, width, 3])
+                    yield np.frombuffer(in_bytes, np.uint8).reshape(
+                        [height, width, bytes_per_pixel]
+                    )
 
         except ffmpeg.Error as e:
             stderr = e.stderr.decode(errors="ignore") if e.stderr else "N/A"
