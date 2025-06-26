@@ -29,18 +29,30 @@ class PixelFormat(str, Enum):
     GRAY8 = "gray"
 
 
+class Resolution(str, Enum):
+    R160x120 = "160x120"
+    R320x240 = "320x240"
+    R640x480 = "640x480"
+    R1280x720 = "1280x720"
+
+
 class VideoCaptureState:
-    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv, pix_fmt: str):
+    def __init__(
+        self, path: Path, ffmpeg_env: FFMpegEnv, pix_fmt: str, resolution: str
+    ):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
         self.pix_fmt = pix_fmt
+        self.resolution = resolution
         self.loader = None
         self.frame_index = 0
         self._create_loader()
 
     def _create_loader(self):
         """Create a new VideoCapture instance"""
-        self.loader = VideoCapture(self.path, self.ffmpeg_env, self.pix_fmt)
+        self.loader = VideoCapture(
+            self.path, self.ffmpeg_env, self.pix_fmt, self.resolution
+        )
         self.frame_index = 0
 
     def reset(self):
@@ -54,10 +66,11 @@ class VideoCaptureState:
         # close call is needed here anymore.
         self.loader = None
 
-    def update_pix_fmt(self, pix_fmt: str):
-        """Update pixel format and recreate loader if changed"""
-        if self.pix_fmt != pix_fmt:
+    def update_settings(self, pix_fmt: str, resolution: str):
+        """Update settings and recreate loader if changed"""
+        if self.pix_fmt != pix_fmt or self.resolution != resolution:
             self.pix_fmt = pix_fmt
+            self.resolution = resolution
             self._create_loader()
 
 
@@ -95,6 +108,11 @@ VIDEO_LOADER_STATES = {}
             label="Pixel Format",
             default=PixelFormat.BGR24,
         ).with_id(3),
+        EnumInput(
+            Resolution,
+            label="Resolution",
+            default=Resolution.R640x480,
+        ).with_id(4),
     ],
     outputs=[
         ImageOutput("Frame", channels=3),
@@ -118,6 +136,7 @@ def get_stream_from_capture_device_node(
     use_limit: bool,
     limit: int,
     pixel_format: PixelFormat,
+    resolution: Resolution,
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float]:
     video_dir, video_name, _ = split_file_path(path)
 
@@ -127,11 +146,12 @@ def get_stream_from_capture_device_node(
             path,
             FFMpegEnv.get_integrated(node_context.storage_dir),
             pixel_format.value,
+            resolution.value,
         )
     else:
         state = VIDEO_LOADER_STATES[path]
-        if state.pix_fmt != pixel_format.value:
-            state.update_pix_fmt(pixel_format.value)
+        if state.pix_fmt != pixel_format.value or state.resolution != resolution.value:
+            state.update_settings(pixel_format.value, resolution.value)
 
     # Add cleanup function to node context - only clean up after the node is done
     def cleanup_state():
