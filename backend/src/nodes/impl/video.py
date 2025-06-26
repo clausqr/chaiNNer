@@ -177,9 +177,24 @@ class VideoCapture:
     ):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
-        self.pix_fmt = (
-            pix_fmt  # ffmpeg pixel format to output (e.g. bgr24, yuyv422, gray)
+        self.requested_fmt = (
+            pix_fmt  # user-selected format (mjpeg, yuyv422, gray, bgr24)
         )
+
+        # Determine v4l2 input format and ffmpeg output pixel format
+        if self.requested_fmt == "mjpeg":
+            self.input_format = "mjpeg"
+            self.output_pix_fmt = "bgr24"  # decode JPEG to BGR
+        elif self.requested_fmt in ("yuyv422",):
+            self.input_format = "yuyv422"
+            self.output_pix_fmt = "bgr24"  # convert to BGR inside ffmpeg
+        elif self.requested_fmt in ("gray", "gray8"):
+            self.input_format = "gray"
+            self.output_pix_fmt = "gray"
+        else:
+            # default assume raw BGR24 supported (rare)
+            self.input_format = "bgr24"
+            self.output_pix_fmt = "bgr24"
 
         # Parse resolution string WxH
         try:
@@ -211,9 +226,8 @@ class VideoCapture:
             "rgb24": 3,
             "gray": 1,
             "gray8": 1,
-            "yuyv422": 2,
         }
-        bytes_per_pixel = _bpp_map.get(self.pix_fmt, 3)
+        bytes_per_pixel = _bpp_map.get(self.output_pix_fmt, 3)
         frame_size = width * height * bytes_per_pixel
 
         try:
@@ -223,10 +237,10 @@ class VideoCapture:
                 ffmpeg.input(
                     self.path,
                     f="v4l2",
-                    input_format="yuyv422",
+                    input_format=self.input_format,
                     video_size=f"{width}x{height}",
                 )
-                .output("pipe:", format="rawvideo", pix_fmt=self.pix_fmt)
+                .output("pipe:", format="rawvideo", pix_fmt=self.output_pix_fmt)
                 .run_async(
                     pipe_stdout=True, pipe_stderr=True, cmd=self.ffmpeg_env.ffmpeg
                 )
@@ -249,11 +263,11 @@ class VideoCapture:
                 if len(in_bytes) == frame_size:
                     arr = np.frombuffer(in_bytes, np.uint8)
 
-                    if self.pix_fmt in ("gray", "gray8"):
+                    if self.output_pix_fmt in ("gray", "gray8"):
                         # Gray → expand to 3-channel
                         arr = arr.reshape((height, width))
                         arr = np.repeat(arr[:, :, None], 3, axis=2)
-                    elif self.pix_fmt == "yuyv422":
+                    elif self.requested_fmt == "yuyv422":
                         # Convert YUYV422 → BGR using OpenCV if available, else skip frame
                         try:
                             import cv2

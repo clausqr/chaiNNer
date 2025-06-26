@@ -24,6 +24,7 @@ from .. import video_frames_group
 
 
 class PixelFormat(str, Enum):
+    MJPEG = "mjpeg"
     BGR24 = "bgr24"
     YUYV422 = "yuyv422"
     GRAY8 = "gray"
