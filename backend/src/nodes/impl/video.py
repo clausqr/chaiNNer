@@ -234,9 +234,29 @@ class VideoCapture:
                     break
 
                 if len(in_bytes) == frame_size:
-                    yield np.frombuffer(in_bytes, np.uint8).reshape(
-                        [height, width, bytes_per_pixel]
-                    )
+                    arr = np.frombuffer(in_bytes, np.uint8)
+
+                    if self.pix_fmt in ("gray", "gray8"):
+                        # Gray → expand to 3-channel
+                        arr = arr.reshape((height, width))
+                        arr = np.repeat(arr[:, :, None], 3, axis=2)
+                    elif self.pix_fmt == "yuyv422":
+                        # Convert YUYV422 → BGR using OpenCV if available, else skip frame
+                        try:
+                            import cv2
+
+                            arr = arr.reshape((height, width, 2))
+                            arr = cv2.cvtColor(arr, cv2.COLOR_YUV2BGR_YUY2)
+                        except Exception as e:
+                            logger.warning(
+                                f"OpenCV conversion failed for YUYV422 → BGR: {e}. Skipping frame."
+                            )
+                            continue
+                    else:
+                        # Assume 3-byte BGR/RGB already
+                        arr = arr.reshape((height, width, 3))
+
+                    yield arr
 
         except ffmpeg.Error as e:
             stderr = e.stderr.decode(errors="ignore") if e.stderr else "N/A"
