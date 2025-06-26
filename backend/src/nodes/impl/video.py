@@ -230,6 +230,8 @@ class VideoCapture:
         bytes_per_pixel = _bpp_map.get(self.output_pix_fmt, 3)
         frame_size = width * height * bytes_per_pixel
 
+        first_frame = True
+
         try:
             # 1. Start the FFmpeg subprocess for this specific stream session.
             logger.info(f"Attempting to start new FFmpeg stream for {self.path}...")
@@ -257,8 +259,23 @@ class VideoCapture:
                 # Read a single frame from stdout.
                 assert process.stdout is not None
                 in_bytes = process.stdout.read(frame_size)
-                if not in_bytes:
-                    break
+                if first_frame and in_bytes and len(in_bytes) != frame_size:
+                    # auto-detect actual resolution
+                    pixels = len(in_bytes) // bytes_per_pixel
+                    common = [
+                        (160, 120),
+                        (320, 240),
+                        (640, 480),
+                        (1280, 720),
+                        (1920, 1080),
+                    ]
+                    for w, h in common:
+                        if w * h == pixels:
+                            width, height = w, h
+                            frame_size = len(in_bytes)
+                            logger.info(f"Auto-detected resolution {width}x{height}")
+                            break
+                    first_frame = False
 
                 if len(in_bytes) == frame_size:
                     arr = np.frombuffer(in_bytes, np.uint8)
@@ -284,6 +301,8 @@ class VideoCapture:
                         arr = arr.reshape((height, width, 3))
 
                     yield arr
+
+                first_frame = False
 
         except ffmpeg.Error as e:
             stderr = e.stderr.decode(errors="ignore") if e.stderr else "N/A"
