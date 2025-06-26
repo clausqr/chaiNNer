@@ -168,9 +168,12 @@ class VideoCapture:
     This class is stateful and is reused across multiple chain runs.
     """
 
-    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
+    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv, pix_fmt: str = "bgr24"):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
+        self.pix_fmt = (
+            pix_fmt  # ffmpeg pixel format to output (e.g. bgr24, yuyv422, gray)
+        )
         # Do not probe the device, as it can hang. Instead, create mock
         # metadata to satisfy the node's requirements for properties like
         # frame_count, which is conceptually infinite for a live stream.
@@ -188,7 +191,17 @@ class VideoCapture:
         process: subprocess.Popen | None = None
         width = 640
         height = 480
-        frame_size = width * height * 3
+
+        # bytes per pixel mapping for constant-bpp formats
+        _bpp_map = {
+            "bgr24": 3,
+            "rgb24": 3,
+            "gray": 1,
+            "gray8": 1,
+            "yuyv422": 2,
+        }
+        bytes_per_pixel = _bpp_map.get(self.pix_fmt, 3)
+        frame_size = width * height * bytes_per_pixel
 
         try:
             # 1. Start the FFmpeg subprocess for this specific stream session.
@@ -200,7 +213,7 @@ class VideoCapture:
                     input_format="yuyv422",
                     video_size=f"{width}x{height}",
                 )
-                .output("pipe:", format="rawvideo", pix_fmt="bgr24")
+                .output("pipe:", format="rawvideo", pix_fmt=self.pix_fmt)
                 .run_async(
                     pipe_stdout=True, pipe_stderr=True, cmd=self.ffmpeg_env.ffmpeg
                 )

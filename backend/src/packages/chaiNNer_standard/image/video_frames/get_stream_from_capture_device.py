@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,7 @@ from api import Generator, IteratorOutputInfo, NodeContext
 from nodes.groups import Condition, if_group
 from nodes.impl.ffmpeg import FFMpegEnv
 from nodes.impl.video import VideoCapture
-from nodes.properties.inputs import BoolInput, FileInput, NumberInput
+from nodes.properties.inputs import BoolInput, EnumInput, FileInput, NumberInput
 from nodes.properties.outputs import (
     DirectoryOutput,
     FileNameOutput,
@@ -22,17 +23,24 @@ from progress_controller import Aborted
 from .. import video_frames_group
 
 
+class PixelFormat(str, Enum):
+    BGR24 = "bgr24"
+    YUYV422 = "yuyv422"
+    GRAY8 = "gray"
+
+
 class VideoCaptureState:
-    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv):
+    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv, pix_fmt: str):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
+        self.pix_fmt = pix_fmt
         self.loader = None
         self.frame_index = 0
         self._create_loader()
 
     def _create_loader(self):
         """Create a new VideoCapture instance"""
-        self.loader = VideoCapture(self.path, self.ffmpeg_env)
+        self.loader = VideoCapture(self.path, self.ffmpeg_env, self.pix_fmt)
         self.frame_index = 0
 
     def reset(self):
@@ -45,6 +53,12 @@ class VideoCaptureState:
         # via the stream_frames generator's finally block. No explicit
         # close call is needed here anymore.
         self.loader = None
+
+    def update_pix_fmt(self, pix_fmt: str):
+        """Update pixel format and recreate loader if changed"""
+        if self.pix_fmt != pix_fmt:
+            self.pix_fmt = pix_fmt
+            self._create_loader()
 
 
 # Global dictionary for storing state
@@ -76,6 +90,11 @@ VIDEO_LOADER_STATES = {}
             .with_docs("Limit the number of frames to iterate over.")
             .with_id(2)
         ),
+        EnumInput(
+            PixelFormat,
+            label="Pixel Format",
+            default=PixelFormat.BGR24,
+        ).with_id(3),
     ],
     outputs=[
         ImageOutput("Frame", channels=3),
@@ -98,17 +117,21 @@ def get_stream_from_capture_device_node(
     path: Path,
     use_limit: bool,
     limit: int,
+    pixel_format: PixelFormat,
 ) -> tuple[Generator[tuple[np.ndarray, int]], Path, str, float]:
     video_dir, video_name, _ = split_file_path(path)
 
     # Retrieve or create state object
     if path not in VIDEO_LOADER_STATES:
         VIDEO_LOADER_STATES[path] = VideoCaptureState(
-            path, FFMpegEnv.get_integrated(node_context.storage_dir)
+            path,
+            FFMpegEnv.get_integrated(node_context.storage_dir),
+            pixel_format.value,
         )
-    # Reuse existing stream if already available to avoid FPS drops.
-
-    state = VIDEO_LOADER_STATES[path]
+    else:
+        state = VIDEO_LOADER_STATES[path]
+        if state.pix_fmt != pixel_format.value:
+            state.update_pix_fmt(pixel_format.value)
 
     # Add cleanup function to node context - only clean up after the node is done
     def cleanup_state():
