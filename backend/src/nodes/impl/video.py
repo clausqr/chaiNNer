@@ -168,17 +168,30 @@ class VideoCapture:
     This class is stateful and is reused across multiple chain runs.
     """
 
-    def __init__(self, path: Path, ffmpeg_env: FFMpegEnv, pix_fmt: str = "bgr24"):
+    def __init__(
+        self,
+        path: Path,
+        ffmpeg_env: FFMpegEnv,
+        pix_fmt: str = "bgr24",
+        resolution: str = "640x480",
+    ):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
         self.pix_fmt = (
             pix_fmt  # ffmpeg pixel format to output (e.g. bgr24, yuyv422, gray)
         )
-        # Do not probe the device, as it can hang. Instead, create mock
-        # metadata to satisfy the node's requirements for properties like
-        # frame_count, which is conceptually infinite for a live stream.
+
+        # Parse resolution string WxH
+        try:
+            w_str, h_str = resolution.lower().split("x")
+            self.width = int(w_str)
+            self.height = int(h_str)
+        except ValueError:
+            self.width, self.height = 640, 480  # fallback
+
+        # Dummy metadata (mainly for other nodes that access fps/frame_count)
         self.metadata = VideoMetadata(
-            width=640, height=480, fps=30.0, frame_count=10000
+            width=self.width, height=self.height, fps=30.0, frame_count=1000000
         )
         logger.info(f"VideoCapture stateful instance initialized for {self.path}")
 
@@ -189,8 +202,8 @@ class VideoCapture:
         it is cleaned up afterward.
         """
         process: subprocess.Popen | None = None
-        width = 640
-        height = 480
+        width = self.width
+        height = self.height
 
         # bytes per pixel mapping for constant-bpp formats
         _bpp_map = {
