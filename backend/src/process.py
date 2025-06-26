@@ -637,13 +637,15 @@ class Executor:
         )
         await self.progress.suspend()
 
-        for fn in context.node_cleanup_fns:
+        # Create a copy of the cleanup functions to avoid "Set changed size during iteration" error
+        cleanup_fns = list(context.node_cleanup_fns)
+        for fn in cleanup_fns:
             try:
                 fn()
             except Exception as e:
                 logger.error(f"Error running cleanup function: {e}")
             finally:
-                context.node_cleanup_fns.remove(fn)
+                context.node_cleanup_fns.discard(fn)
 
         lazy_time_after = get_lazy_evaluation_time()
         execution_time -= lazy_time_after - lazy_time_before
@@ -945,11 +947,15 @@ class Executor:
 
         # Run cleanup functions
         for context in self.__context_cache.values():
-            for fn in context.chain_cleanup_fns:
+            # Create a copy of the cleanup functions to avoid "Set changed size during iteration" error
+            cleanup_fns = list(context.chain_cleanup_fns)
+            for fn in cleanup_fns:
                 try:
                     fn()
                 except Exception as e:
                     logger.error(f"Error running cleanup function: {e}")
+                finally:
+                    context.chain_cleanup_fns.discard(fn)
 
         # await all broadcasts
         tasks = self.__broadcast_tasks

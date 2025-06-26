@@ -1,0 +1,187 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# chaiNNer Debugging and Troubleshooting Guide
+
+## Common Development Issues
+
+### Port Conflicts and Process Management
+
+#### Issue: "Address already in use" Errors
+**Symptoms**:
+- `RuntimeError: Can't listen for client connections: [Errno 98] Address already in use`
+- `sanic.exceptions.ServerError: Sanic server could not start: [Errno 98] Address already in use`
+
+**Solution**:
+```bash
+# Kill all lingering processes
+pkill -f debugpy && pkill -f nodemon && pkill -f "python.*run.py" && pkill -f "python.*server_host"
+
+# Then restart
+npm run dev
+```
+
+#### Issue: Multiple Backend Processes
+**Symptoms**: Multiple Python processes running, backend not responding
+**Solution**: Use `ps aux | grep python` to identify processes, then kill them
+
+### Video Capture Issues
+
+#### Issue: "Only one frame captured"
+**Symptoms**: Video capture stops after first frame
+**Root Cause**: Automatic cleanup in generator's `finally` block
+**Solution**: Remove `finally: self.close()` from `VideoCapture.stream_frames()`
+
+#### Issue: "NoneType object has no attribute 'stdout'"
+**Symptoms**: FFmpeg process errors during video capture
+**Root Cause**: FFmpeg process failed to start or was terminated
+**Solution**: Add null checks in [backend/src/nodes/impl/video.py](mdc:backend/src/nodes/impl/video.py)
+
+#### Issue: "FFmpeg process didn't terminate gracefully"
+**Symptoms**: Process hanging during cleanup
+**Solution**: Implement timeout-based cleanup with force kill fallback
+
+### Backend Startup Issues
+
+#### Issue: Backend not responding
+**Check**:
+1. Is backend running? `curl http://127.0.0.1:8000/`
+2. Are there port conflicts? `netstat -tlnp | grep 8000`
+3. Check backend logs for errors
+
+#### Issue: Missing dependencies
+**Symptoms**: Import errors for torch, ncnn, onnx
+**Solution**: Install optional dependencies as needed
+```bash
+pip install torch torchvision
+pip install ncnn
+pip install onnx onnxruntime
+```
+
+### Frontend Issues
+
+#### Issue: Frontend can't connect to backend
+**Symptoms**: "Failed to fetch" errors in frontend
+**Check**:
+1. Backend running on port 8000?
+2. No firewall blocking connection?
+3. Correct backend URL in frontend config?
+
+#### Issue: Electron app not starting
+**Symptoms**: App crashes on startup
+**Check**:
+1. Node.js version compatibility
+2. Missing dependencies: `npm install`
+3. Build issues: `npm run build`
+
+## Debugging Tools and Commands
+
+### Process Management
+```bash
+# List all Python processes
+ps aux | grep python
+
+# List processes using specific ports
+netstat -tlnp | grep 8000
+netstat -tlnp | grep 5678
+
+# Kill processes by pattern
+pkill -f "pattern"
+```
+
+### Backend Debugging
+```bash
+# Start backend with debugging
+npm run dev:py
+
+# Start backend directly (no debugpy)
+cd backend/src && python ./run.py 8000
+
+# Check backend health
+curl http://127.0.0.1:8000/
+```
+
+### Frontend Debugging
+```bash
+# Start frontend only
+npm run frontend
+
+# Check frontend build
+npm run build
+
+# Run frontend tests
+npm run test:js
+```
+
+### Log Analysis
+**Backend Logs**: Look for patterns like:
+- `[Worker] Got X bytes from capture device`
+- `[Worker] VideoCapture state loaded for path /dev/video0`
+- `[WARNING] FFmpeg process didn't terminate gracefully`
+
+**Frontend Logs**: Check Electron console for:
+- Network errors
+- JavaScript exceptions
+- Build warnings
+
+## Development Environment Setup
+
+### Clean Startup Process
+1. **Kill all processes**:
+   ```bash
+   pkill -f debugpy && pkill -f nodemon && pkill -f "python.*run.py"
+   ```
+
+2. **Start development environment**:
+   ```bash
+   npm run dev
+   ```
+
+3. **Verify services**:
+   - Backend: `curl http://127.0.0.1:8000/`
+   - Frontend: Check Electron app launches
+
+### Alternative Startup Methods
+- **Backend only**: `npm run dev:py`
+- **Frontend only**: `npm run frontend`
+- **Direct backend**: `cd backend/src && python ./run.py 8000`
+
+## Performance Issues
+
+### Video Capture Performance
+- **High CPU usage**: Check FFmpeg parameters
+- **Memory leaks**: Ensure proper cleanup in VideoCapture
+- **Frame drops**: Monitor FFmpeg process health
+
+### Backend Performance
+- **Slow node execution**: Check worker process health
+- **Memory issues**: Monitor Python process memory usage
+- **Network latency**: Check localhost connection
+
+## Testing Video Capture
+
+### Manual Testing Steps
+1. Start backend: `npm run dev:py`
+2. Start frontend: `npm run frontend`
+3. Add video capture node to workflow
+4. Monitor backend logs for frame capture
+5. Verify continuous streaming (not just one frame)
+
+### Expected Log Messages
+```
+[Worker] VideoCapture state loaded for path /dev/video0
+[Worker] Got 921600 bytes from capture device
+[Worker] Cleaned up VideoCapture state for path /dev/video0
+```
+
+### Troubleshooting Video Capture
+- **No frames**: Check device permissions (`/dev/video0`)
+- **One frame only**: Check generator cleanup logic
+- **Process errors**: Check FFmpeg installation and parameters
+
+## File References
+- [backend/src/nodes/impl/video.py](mdc:backend/src/nodes/impl/video.py): Video capture implementation
+- [package.json](mdc:package.json): Development scripts and dependencies
+- Backend logs: Monitor for capture status and errors

@@ -1,0 +1,137 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# chaiNNer Project Structure Guide
+
+## Overview
+chaiNNer is a flowchart-based image processing GUI built with Electron (frontend) and Python/Sanic (backend).
+
+## Project Structure
+
+### Root Level
+- [package.json](mdc:package.json): Main project configuration, scripts, and dependencies
+- `.cursor/rules/`: Cursor IDE rules for development guidance
+
+### Frontend (Electron)
+- `src/`: TypeScript/React source code
+- `.vite/`: Vite build output
+- `src/main/`: Electron main process
+- `src/renderer/`: Electron renderer process (React app)
+
+### Backend (Python/Sanic)
+- `backend/src/`: Python backend source code
+- `backend/src/run.py`: Main backend entry point
+- `backend/src/server_host.py`: Sanic server implementation
+- `backend/src/nodes/`: Node implementations for image processing
+- `backend/src/nodes/impl/`: Specific node implementations
+  - [backend/src/nodes/impl/video.py](mdc:backend/src/nodes/impl/video.py): Video capture and processing nodes
+
+## Development Scripts
+
+### Main Development Commands
+- `npm run dev`: Start both backend and frontend with live reload
+- `npm run dev:py`: Start backend only with debugpy debugging
+- `npm run frontend`: Start frontend only (connects to backend on port 8000)
+- `npm run dev:reload`: Start with hot restart enabled
+
+### Build Commands
+- `npm run package`: Package the application
+- `npm run make`: Create distributable packages
+- `npm run lint`: Run linting on both JavaScript and Python code
+
+## Architecture
+
+### Backend Architecture
+- **Sanic Server**: Fast async web server on port 8000
+- **Worker Processes**: Separate processes for heavy computation
+- **Node System**: Modular image processing nodes
+- **FFmpeg Integration**: Video processing via FFmpeg subprocesses
+
+### Frontend Architecture
+- **Electron**: Desktop application wrapper
+- **React**: UI framework with TypeScript
+- **ReactFlow**: Flowchart/node editor
+- **Chakra UI**: Component library
+
+## Key Components
+
+### Video Processing
+- **VideoCapture**: Real-time device capture (`/dev/video0`)
+- **VideoLoader**: File-based video processing
+- **FFmpeg Integration**: External video processing via subprocess
+
+### Node System
+- **Standard Nodes**: Basic image processing operations
+- **PyTorch Nodes**: AI/ML-based processing (requires torch)
+- **NCNN Nodes**: Neural network processing (requires ncnn)
+- **ONNX Nodes**: ONNX model processing (requires onnx)
+
+## Development Workflow
+
+### Starting Development
+1. Kill any lingering processes: `pkill -f debugpy && pkill -f nodemon`
+2. Start full environment: `npm run dev`
+3. Backend runs on port 8000, frontend connects automatically
+
+### Debugging
+- Backend debugging: Use `npm run dev:py` for debugpy integration
+- Frontend debugging: Electron DevTools are enabled by default
+- Process monitoring: Check for port conflicts and hanging processes
+
+### Common Issues
+- **Port Conflicts**: Kill processes and restart
+- **Video Capture**: Ensure proper cleanup logic in generators
+- **FFmpeg Issues**: Check process management and error handling
+
+## File Organization
+
+### Backend Files
+- `backend/src/nodes/impl/`: Node implementations
+- `backend/src/server_host.py`: Main server logic
+- `backend/src/run.py`: Entry point
+- `backend/src/nodes/`: Node definitions and metadata
+
+### Frontend Files
+- `src/main/`: Electron main process
+- `src/renderer/`: React application
+- `src/common/`: Shared utilities and types
+
+## Dependencies
+
+### Backend Dependencies
+- **Sanic**: Web framework
+- **FFmpeg-python**: Video processing
+- **NumPy**: Numerical computing
+- **Optional**: PyTorch, NCNN, ONNX for AI processing
+
+### Frontend Dependencies
+- **Electron**: Desktop app framework
+- **React**: UI framework
+- **ReactFlow**: Flowchart editor
+- **Chakra UI**: Component library
+- **TypeScript**: Type safety
+
+## Testing and Quality
+
+### Linting
+- JavaScript/TypeScript: ESLint + Stylelint
+- Python: Ruff (formatting and linting)
+- Run with: `npm run lint`
+
+### Testing
+- JavaScript: Vitest
+- Python: Pytest
+- Run with: `npm run test`
+
+## Deployment
+
+### Packaging
+- `npm run package`: Create portable package
+- `npm run make`: Create platform-specific installers
+- Supports: Windows, macOS, Linux
+
+### Distribution
+- GitHub releases for distribution
+- Platform-specific packages (deb, rpm, dmg, exe)

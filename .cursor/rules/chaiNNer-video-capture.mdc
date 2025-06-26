@@ -1,0 +1,104 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# chaiNNer Video Capture Development Guide
+
+## Video Capture Implementation
+
+The video capture functionality is implemented in [backend/src/nodes/impl/video.py](mdc:backend/src/nodes/impl/video.py) with two main classes:
+
+### VideoCapture Class
+- **Purpose**: Handles real-time video capture from devices (e.g., `/dev/video0`)
+- **Key Methods**:
+  - `stream_frames()`: Returns a generator that yields BGR uint8 numpy arrays
+  - `close()`: Properly terminates FFmpeg processes and cleans up resources
+
+### VideoLoader Class
+- **Purpose**: Handles video file playback
+- **Key Methods**:
+  - `stream_frames()`: Returns a generator for video file frames
+  - `get_audio_stream()`: Returns audio stream from video files
+
+## Critical Implementation Details
+
+### Generator Cleanup Logic
+⚠️ **IMPORTANT**: The `VideoCapture.stream_frames()` method should NOT have automatic cleanup in a `finally` block. This was causing the "one frame only" issue.
+
+**Correct Pattern**:
+```python
+def stream_frames(self):
+    # Setup FFmpeg process
+    # Yield frames in a loop
+    # Let caller manage cleanup via VideoCaptureState.cleanup()
+```
+
+**Incorrect Pattern** (causes premature termination):
+```python
+def stream_frames(self):
+    try:
+        # Setup and yield frames
+    finally:
+        self.close()  # ❌ This closes after first frame
+```
+
+### FFmpeg Process Management
+- FFmpeg processes are managed via `subprocess.Popen`
+- Always check for `None` values before accessing `stdout`
+- Use graceful termination (`terminate()`) before force kill (`kill()`)
+- Set appropriate timeouts for process cleanup
+
+## Development Environment Issues
+
+### Debug Port Conflicts
+When encountering `[Errno 98] Address already in use` errors:
+
+1. **Kill all lingering processes**:
+   ```bash
+   pkill -f debugpy && pkill -f nodemon && pkill -f "python.*run.py"
+   ```
+
+2. **Start development environment**:
+   ```bash
+   npm run dev  # Starts both backend and frontend
+   ```
+
+### Alternative Startup Methods
+- `npm run dev:py`: Backend only with debugpy (port 5678)
+- `npm run frontend`: Frontend only (connects to backend on port 8000)
+- `cd backend/src && python ./run.py 8000`: Direct backend startup
+
+## Video Capture State Management
+
+The video capture state is managed by `VideoCaptureState` which:
+- Registers cleanup handlers for proper resource management
+- Handles device path validation
+- Manages FFmpeg environment configuration
+
+## Common Issues and Solutions
+
+### Issue: "Only one frame captured"
+**Cause**: Automatic cleanup in generator's `finally` block
+**Solution**: Remove `finally: self.close()` from `stream_frames()`
+
+### Issue: "NoneType object has no attribute 'stdout'"
+**Cause**: FFmpeg process failed to start or was terminated
+**Solution**: Add null checks before accessing `ffmpeg_reader.stdout`
+
+### Issue: "FFmpeg process didn't terminate gracefully"
+**Cause**: Process hanging during cleanup
+**Solution**: Implement timeout-based cleanup with force kill fallback
+
+## Testing Video Capture
+
+1. Ensure backend is running on port 8000
+2. Start frontend with `npm run frontend`
+3. Use video capture node in chaiNNer interface
+4. Monitor backend logs for capture status
+5. Verify continuous frame streaming (not just one frame)
+
+## Related Files
+- [backend/src/nodes/impl/video.py](mdc:backend/src/nodes/impl/video.py): Main video capture implementation
+- [package.json](mdc:package.json): Development scripts and dependencies
+- Backend logs: Monitor for "Got X bytes from capture device" messages
