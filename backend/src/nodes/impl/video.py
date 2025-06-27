@@ -183,7 +183,7 @@ class VideoCapture:
             device_index = int(str(path).replace("/dev/video", ""))
         except Exception:
             device_index = 0
-        self.cap = cv2.VideoCapture(device_index)
+        self.cap = cv2.VideoCapture(device_index, cv2.CAP_V4L2)
         try:
             w_str, h_str = resolution.lower().split("x")
             width = int(w_str)
