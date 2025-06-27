@@ -149,10 +149,13 @@ def get_stream_from_capture_device_node(
             pixel_format.value,
             resolution.value,
         )
-    else:
-        state = VIDEO_LOADER_STATES[path]
-        if state.pix_fmt != pixel_format.value or state.resolution != resolution.value:
-            state.update_settings(pixel_format.value, resolution.value)
+
+    # `state` is now guaranteed to exist
+    state = VIDEO_LOADER_STATES[path]
+
+    # Update settings if the pixel format or resolution has changed
+    if state.pix_fmt != pixel_format.value or state.resolution != resolution.value:
+        state.update_settings(pixel_format.value, resolution.value)
 
     # Add cleanup function to node context - only clean up after the node is done
     def cleanup_state():
