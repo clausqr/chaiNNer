@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import subprocess
 from dataclasses import dataclass
 from io import BufferedIOBase
@@ -168,6 +170,54 @@ class VideoCapture:
     This class is stateful and is reused across multiple chain runs.
     """
 
+    @staticmethod
+    def detect_device_capabilities(
+        path: Path, ffmpeg_env: FFMpegEnv
+    ) -> tuple[str, str]:
+        """
+        Detect the best pixel format and resolution for a v4l2 device.
+        Returns (pixel_format, resolution) tuple.
+        """
+        try:
+            # Try to probe the device to see what formats are available
+            probe = ffmpeg.probe(str(path), f="v4l2", cmd=ffmpeg_env.ffprobe)
+            video_stream = next(
+                (
+                    stream
+                    for stream in probe["streams"]
+                    if stream["codec_type"] == "video"
+                ),
+                None,
+            )
+
+            if video_stream:
+                # Get the actual pixel format from the device
+                actual_pix_fmt = video_stream.get("pix_fmt", "yuyv422")
+                width = int(video_stream.get("width", 160))
+                height = int(video_stream.get("height", 120))
+
+                # Map ffmpeg pixel formats to our internal format names
+                format_map = {
+                    "yuyv422": "yuyv422",
+                    "mjpeg": "mjpeg",
+                    "gray": "gray",
+                    "bgr24": "bgr24",
+                }
+
+                detected_format = format_map.get(actual_pix_fmt, "yuyv422")
+                detected_resolution = f"{width}x{height}"
+
+                logger.info(
+                    f"Detected device format: {detected_format}, resolution: {detected_resolution}"
+                )
+                return detected_format, detected_resolution
+
+        except Exception as e:
+            logger.warning(f"Could not detect device capabilities for {path}: {e}")
+
+        # Fallback defaults
+        return "yuyv422", "160x120"
+
     def __init__(
         self,
         path: Path,
@@ -177,6 +227,7 @@ class VideoCapture:
     ):
         self.path = path
         self.ffmpeg_env = ffmpeg_env
+
         self.requested_fmt = (
             pix_fmt  # user-selected format (mjpeg, yuyv422, gray, bgr24)
         )
@@ -227,7 +278,11 @@ class VideoCapture:
             "gray": 1,
             "gray8": 1,
         }
-        bytes_per_pixel = _bpp_map.get(self.output_pix_fmt, 3)
+        # For YUYV422, we need to handle it specially since it's 2 bytes per pixel
+        if self.requested_fmt == "yuyv422":
+            bytes_per_pixel = 2
+        else:
+            bytes_per_pixel = _bpp_map.get(self.output_pix_fmt, 3)
         frame_size = width * height * bytes_per_pixel
 
         first_frame = True

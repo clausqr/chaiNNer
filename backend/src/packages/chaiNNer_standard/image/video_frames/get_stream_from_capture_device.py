@@ -24,6 +24,7 @@ from .. import video_frames_group
 
 
 class PixelFormat(str, Enum):
+    AUTO = "auto"
     MJPEG = "mjpeg"
     BGR24 = "bgr24"
     YUYV422 = "yuyv422"
@@ -51,8 +52,22 @@ class VideoCaptureState:
 
     def _create_loader(self):
         """Create a new VideoCapture instance"""
+        # Handle AUTO format by detecting device capabilities
+        actual_pix_fmt = self.pix_fmt
+        actual_resolution = self.resolution
+
+        if self.pix_fmt == "auto":
+            detected_fmt, detected_res = VideoCapture.detect_device_capabilities(
+                self.path, self.ffmpeg_env
+            )
+            actual_pix_fmt = detected_fmt
+            actual_resolution = detected_res
+            logger.info(
+                f"Auto-detected format: {actual_pix_fmt}, resolution: {actual_resolution}"
+            )
+
         self.loader = VideoCapture(
-            self.path, self.ffmpeg_env, self.pix_fmt, self.resolution
+            self.path, self.ffmpeg_env, actual_pix_fmt, actual_resolution
         )
         self.frame_index = 0
 
@@ -69,7 +84,13 @@ class VideoCaptureState:
 
     def update_settings(self, pix_fmt: str, resolution: str):
         """Update settings and recreate loader if changed"""
-        if self.pix_fmt != pix_fmt or self.resolution != resolution:
+        # For AUTO format, we need to recreate the loader to detect capabilities
+        if (
+            self.pix_fmt != pix_fmt
+            or self.resolution != resolution
+            or pix_fmt == "auto"
+            or self.pix_fmt == "auto"
+        ):
             self.pix_fmt = pix_fmt
             self.resolution = resolution
             self._create_loader()
@@ -107,12 +128,12 @@ VIDEO_LOADER_STATES = {}
         EnumInput(
             PixelFormat,
             label="Pixel Format",
-            default=PixelFormat.BGR24,
+            default=PixelFormat.AUTO,
         ).with_id(3),
         EnumInput(
             Resolution,
             label="Resolution",
-            default=Resolution.R640x480,
+            default=Resolution.R160x120,
         ).with_id(4),
     ],
     outputs=[
