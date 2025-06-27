@@ -6,6 +6,7 @@ from io import BufferedIOBase
 from pathlib import Path
 from typing import Generator
 
+import cv2
 import ffmpeg
 import numpy as np
 from sanic.log import logger
@@ -166,57 +167,9 @@ class VideoLoader:
 
 class VideoCapture:
     """
-    Handles capturing video from a v4l2 device using FFmpeg.
+    Handles capturing video from a v4l2 device using OpenCV.
     This class is stateful and is reused across multiple chain runs.
     """
-
-    @staticmethod
-    def detect_device_capabilities(
-        path: Path, ffmpeg_env: FFMpegEnv
-    ) -> tuple[str, str]:
-        """
-        Detect the best pixel format and resolution for a v4l2 device.
-        Returns (pixel_format, resolution) tuple.
-        """
-        try:
-            # Try to probe the device to see what formats are available
-            probe = ffmpeg.probe(str(path), f="v4l2", cmd=ffmpeg_env.ffprobe)
-            video_stream = next(
-                (
-                    stream
-                    for stream in probe["streams"]
-                    if stream["codec_type"] == "video"
-                ),
-                None,
-            )
-
-            if video_stream:
-                # Get the actual pixel format from the device
-                actual_pix_fmt = video_stream.get("pix_fmt", "yuyv422")
-                width = int(video_stream.get("width", 160))
-                height = int(video_stream.get("height", 120))
-
-                # Map ffmpeg pixel formats to our internal format names
-                format_map = {
-                    "yuyv422": "yuyv422",
-                    "mjpeg": "mjpeg",
-                    "gray": "gray",
-                    "bgr24": "bgr24",
-                }
-
-                detected_format = format_map.get(actual_pix_fmt, "yuyv422")
-                detected_resolution = f"{width}x{height}"
-
-                logger.info(
-                    f"Detected device format: {detected_format}, resolution: {detected_resolution}"
-                )
-                return detected_format, detected_resolution
-
-        except Exception as e:
-            logger.warning(f"Could not detect device capabilities for {path}: {e}")
-
-        # Fallback defaults
-        return "yuyv422", "160x120"
 
     def __init__(
         self,
@@ -225,158 +178,32 @@ class VideoCapture:
         pix_fmt: str = "bgr24",
         resolution: str = "640x480",
     ):
-        self.path = path
-        self.ffmpeg_env = ffmpeg_env
-
-        self.requested_fmt = (
-            pix_fmt  # user-selected format (mjpeg, yuyv422, gray, bgr24)
-        )
-
-        # Determine v4l2 input format and ffmpeg output pixel format
-        if self.requested_fmt == "mjpeg":
-            self.input_format = "mjpeg"
-            self.output_pix_fmt = "bgr24"  # decode JPEG to BGR
-        elif self.requested_fmt in ("yuyv422",):
-            self.input_format = "yuyv422"
-            self.output_pix_fmt = "bgr24"  # convert to BGR inside ffmpeg
-        elif self.requested_fmt in ("gray", "gray8"):
-            self.input_format = "gray"
-            self.output_pix_fmt = "gray"
-        else:
-            # default assume raw BGR24 supported (rare)
-            self.input_format = "bgr24"
-            self.output_pix_fmt = "bgr24"
-
-        # Parse resolution string WxH
+        # path is expected to be like '/dev/video0' or an integer index
+        try:
+            device_index = int(str(path).replace("/dev/video", ""))
+        except Exception:
+            device_index = 0
+        self.cap = cv2.VideoCapture(device_index)
         try:
             w_str, h_str = resolution.lower().split("x")
-            self.width = int(w_str)
-            self.height = int(h_str)
+            width = int(w_str)
+            height = int(h_str)
         except ValueError:
-            self.width, self.height = 640, 480  # fallback
-
-        # Dummy metadata (mainly for other nodes that access fps/frame_count)
-        self.metadata = VideoMetadata(
-            width=self.width, height=self.height, fps=30.0, frame_count=1000000
-        )
-        logger.info(f"VideoCapture stateful instance initialized for {self.path}")
+            width, height = 640, 480
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        logger.info(f"OpenCV VideoCapture initialized at {self.width}x{self.height}")
 
     def stream_frames(self) -> Generator[np.ndarray, None, None]:
-        """
-        A generator that yields video frames. It handles the entire lifecycle
-        of the ffmpeg process for a single streaming session and ensures
-        it is cleaned up afterward.
-        """
-        process: subprocess.Popen | None = None
-        width = self.width
-        height = self.height
+        while True:
+            ret, frame = self.cap.read()
+            if not ret:
+                logger.warning("OpenCV failed to read frame from camera.")
+                break
+            yield frame
 
-        # bytes per pixel mapping for constant-bpp formats
-        _bpp_map = {
-            "bgr24": 3,
-            "rgb24": 3,
-            "gray": 1,
-            "gray8": 1,
-        }
-        # For YUYV422, we need to handle it specially since it's 2 bytes per pixel
-        if self.requested_fmt == "yuyv422":
-            bytes_per_pixel = 2
-        else:
-            bytes_per_pixel = _bpp_map.get(self.output_pix_fmt, 3)
-        frame_size = width * height * bytes_per_pixel
-
-        first_frame = True
-
-        try:
-            # 1. Start the FFmpeg subprocess for this specific stream session.
-            logger.info(f"Attempting to start new FFmpeg stream for {self.path}...")
-            process = (
-                ffmpeg.input(
-                    self.path,
-                    f="v4l2",
-                    input_format=self.input_format,
-                    video_size=f"{width}x{height}",
-                )
-                .output("pipe:", format="rawvideo", pix_fmt=self.output_pix_fmt)
-                .run_async(
-                    pipe_stdout=True, pipe_stderr=True, cmd=self.ffmpeg_env.ffmpeg
-                )
-            )
-            assert process is not None  # For the type checker
-            logger.info(f"FFmpeg stream started with PID: {process.pid}")
-
-            # 2. Enter the capture loop.
-            while True:
-                # Check for termination.
-                if process.poll() is not None:
-                    break
-
-                # Read a single frame from stdout.
-                assert process.stdout is not None
-                in_bytes = process.stdout.read(frame_size)
-                if first_frame and in_bytes and len(in_bytes) != frame_size:
-                    # auto-detect actual resolution
-                    pixels = len(in_bytes) // bytes_per_pixel
-                    common = [
-                        (160, 120),
-                        (320, 240),
-                        (640, 480),
-                        (1280, 720),
-                        (1920, 1080),
-                    ]
-                    for w, h in common:
-                        if w * h == pixels:
-                            width, height = w, h
-                            frame_size = len(in_bytes)
-                            logger.info(f"Auto-detected resolution {width}x{height}")
-                            break
-                    first_frame = False
-
-                if len(in_bytes) == frame_size:
-                    arr = np.frombuffer(in_bytes, np.uint8)
-
-                    if self.output_pix_fmt in ("gray", "gray8"):
-                        # Gray → expand to 3-channel
-                        arr = arr.reshape((height, width))
-                        arr = np.repeat(arr[:, :, None], 3, axis=2)
-                    elif self.requested_fmt == "yuyv422":
-                        # Convert YUYV422 → BGR using OpenCV if available, else skip frame
-                        try:
-                            import cv2
-
-                            arr = arr.reshape((height, width, 2))
-                            arr = cv2.cvtColor(arr, cv2.COLOR_YUV2BGR_YUY2)
-                        except Exception as e:
-                            logger.warning(
-                                f"OpenCV conversion failed for YUYV422 → BGR: {e}. Skipping frame."
-                            )
-                            continue
-                    else:
-                        # Assume 3-byte BGR/RGB already
-                        arr = arr.reshape((height, width, 3))
-
-                    yield arr
-
-                first_frame = False
-
-        except ffmpeg.Error as e:
-            stderr = e.stderr.decode(errors="ignore") if e.stderr else "N/A"
-            logger.error(f"FFmpeg failed to start for {self.path}. Stderr: {stderr}")
-            raise RuntimeError(f"FFmpeg startup failed: {stderr}") from e
-
-        finally:
-            # 3. Ensure the process for THIS stream is cleaned up.
-            if process:
-                logger.info(f"Closing FFmpeg stream with PID: {process.pid}")
-                try:
-                    if process.poll() is None:
-                        process.terminate()
-                        process.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    logger.warning(
-                        f"FFmpeg stream {process.pid} did not terminate, killing."
-                    )
-                    process.kill()
-                except Exception as e:
-                    logger.error(f"Error during FFmpeg stream cleanup: {e}")
-            logger.info("FFmpeg stream session ended.")
+    def cleanup(self):
+        self.cap.release()
+        logger.info("OpenCV VideoCapture released.")
