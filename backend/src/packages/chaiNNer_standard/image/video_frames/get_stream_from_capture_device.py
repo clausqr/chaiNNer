@@ -56,16 +56,6 @@ class VideoCaptureState:
         actual_pix_fmt = self.pix_fmt
         actual_resolution = self.resolution
 
-        if self.pix_fmt == "auto":
-            detected_fmt, detected_res = VideoCapture.detect_device_capabilities(
-                self.path, self.ffmpeg_env
-            )
-            actual_pix_fmt = detected_fmt
-            actual_resolution = detected_res
-            logger.info(
-                f"Auto-detected format: {actual_pix_fmt}, resolution: {actual_resolution}"
-            )
-
         self.loader = VideoCapture(
             self.path, self.ffmpeg_env, actual_pix_fmt, actual_resolution
         )
@@ -188,7 +178,6 @@ def get_stream_from_capture_device_node(
     # Only add cleanup after the node execution is complete
     node_context.add_cleanup(cleanup_state, after="chain")
 
-    logger.info(f"VideoCapture state loaded for path {path}.")
     # The frame count for a live stream is conceptually infinite.
     # Use the user-defined limit if provided, otherwise a large number.
     frame_count = limit if use_limit else 1000000
